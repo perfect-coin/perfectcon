@@ -36,12 +36,13 @@ static const unsigned int MAX_ORPHAN_TRANSACTIONS = MAX_BLOCK_SIZE/100;
 static const unsigned int MAX_INV_SZ = 30000;
 static const int64 MIN_TX_FEE = .00001 * COIN;
 static const int64 MIN_RELAY_TX_FEE = .00001 * COIN;
-static const int64 MAX_MONEY = 60000000 * COIN;
-static const int64 MAX_MONEY2 = 60000000 * COIN;			// 60 mil
+static const int64 MAX_MONEY = 16000000 * COIN;
+static const int64 MAX_MONEY2 = 16000000 * COIN;			// 16 mil
 static const int64 MAX_MINT_PROOF_OF_STAKE = 2.00 * COIN;	// 200% annual interest
+
 static const int64 MAX_MINT_PROOF_OF_STAKEV2 = 7.50 * COIN;	// 750% annual interest
-static const unsigned int FORK_TIME = 1404678625; // Sun, 06 Jul 2014 20:30:25 GMT
-static const unsigned int FORK_TIME2 = 1423836000; // Fri, 13 Feb 2015 14:00:00 GMT
+static const unsigned int FORK_TIME = 1449280000; // Sun, 06 Jul 2014 20:30:25 GMT
+
 static const int64 MIN_TXOUT_AMOUNT = MIN_TX_FEE;
 
 inline bool MoneyRange(int64 nValue) { return (nValue >= 0 && nValue <= MAX_MONEY); }
@@ -54,18 +55,13 @@ static const int fHaveUPnP = true;
 static const int fHaveUPnP = false;
 #endif
 
-static const uint256 hashGenesisBlockOfficial("0x000005fe04e512585c3611369c7ce23f130958038c18a462577d002680dab4fc");
-static const uint256 hashGenesisBlockTestNet ("0x534d8009c099b04d05d7475f48eea977ca2fedaf409e233c884eff34d2efdb8e");
+static const uint256 hashGenesisBlockOfficial("0x000009ed6a86e46393ad6e8024068bc2492f91149b84e79ea62b342a44ee09f2");
+static const uint256 hashGenesisBlockTestNet ("0x");
 
-inline int64 GetClockDrift(int64 nTime)
-{
-	if(nTime < FORK_TIME2)
-		return 15 * 60;
-	else
-		return 60;
-}
-static const int64 MAX_TIME_SINCE_BEST_BLOCK = 10; // how many seconds to wait before sending next PushGetBlocks()
+static const int64 nMaxClockDrift = 15 * 60;        // fifteen minutes
+
 extern CScript COINBASE_FLAGS;
+
 
 extern CCriticalSection cs_main;
 extern std::map<uint256, CBlockIndex*> mapBlockIndex;
@@ -73,7 +69,6 @@ extern std::set<std::pair<COutPoint, unsigned int> > setStakeSeen;
 extern uint256 hashGenesisBlock;
 extern CBlockIndex* pindexGenesisBlock;
 extern unsigned int nStakeMinAge;
-extern unsigned int nStakeMinAgeV2;
 extern int nCoinbaseMaturity;
 extern int nBestHeight;
 extern CBigNum bnBestChainTrust;
@@ -92,12 +87,6 @@ extern CCriticalSection cs_setpwalletRegistered;
 extern std::set<CWallet*> setpwalletRegistered;
 extern unsigned char pchMessageStart[4];
 extern std::map<uint256, CBlock*> mapOrphanBlocks;
-extern bool fHaveGUI;
-extern std::map<unsigned int, unsigned int> mapHashedBlocks;
-extern std::map<std::string, std::pair<int, int> > mapGetBlocksRequests;
-extern std::map <std::string, int> mapPeerRejectedBlocks;
-extern bool fStrictProtocol;
-extern bool fStrictIncoming;
 
 // Settings
 extern int64 nTransactionFee;

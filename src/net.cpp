@@ -3,9 +3,11 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "irc.h"
 #include "db.h"
 #include "net.h"
 #include "init.h"
+#include "strlcpy.h"
 #include "addrman.h"
 #include "ui_interface.h"
 
@@ -20,14 +22,10 @@
 #include <miniupnpc/upnperrors.h>
 #endif
 
-#if !defined(HAVE_MSG_NOSIGNAL)
-#define MSG_NOSIGNAL 0
-#endif
-
 using namespace std;
 using namespace boost;
 
-static const int MAX_OUTBOUND_CONNECTIONS = 25;
+static const int MAX_OUTBOUND_CONNECTIONS = 12;
 
 void ThreadMessageHandler2(void* parg);
 void ThreadSocketHandler2(void* parg);
@@ -59,7 +57,7 @@ static bool vfLimited[NET_MAX] = {};
 static CNode* pnodeLocalHost = NULL;
 CAddress addrSeenByPeer(CService("0.0.0.0", 0), nLocalServices);
 uint64 nLocalHostNonce = 0;
-boost::array<int, THREAD_MAX> vnThreadsRunning;
+array<int, THREAD_MAX> vnThreadsRunning;
 static std::vector<SOCKET> vhListenSocket;
 CAddrMan addrman;
 
@@ -145,7 +143,7 @@ CAddress GetLocalAddress(const CNetAddr *paddrPeer)
 bool RecvLine(SOCKET hSocket, string& strLine)
 {
     strLine = "";
-    while (true)
+    loop
     {
         char c;
         int nBytes = recv(hSocket, &c, 1, 0);
@@ -318,7 +316,7 @@ bool GetMyExternalIP2(const CService& addrConnect, const char* pszGet, const cha
     {
         if (strLine.empty()) // HTTP response is separated from headers by blank line
         {
-            while (true)
+            loop
             {
                 if (!RecvLine(hSocket, strLine))
                 {
@@ -542,17 +540,14 @@ void CNode::CloseSocketDisconnect()
         printf("disconnecting node %s\n", addrName.c_str());
         closesocket(hSocket);
         hSocket = INVALID_SOCKET;
-        
-		// in case this fails, we'll empty the recv buffer when the CNode is deleted
-		TRY_LOCK(cs_vRecvMsg, lockRecv);
-		if (lockRecv)
-			vRecvMsg.clear();
+        vRecv.clear();
     }
 }
 
 void CNode::Cleanup()
 {
 }
+
 
 void CNode::PushVersion()
 {
@@ -565,6 +560,10 @@ void CNode::PushVersion()
     PushMessage("version", PROTOCOL_VERSION, nLocalServices, nTime, addrYou, addrMe,
                 nLocalHostNonce, FormatSubVersion(CLIENT_NAME, CLIENT_VERSION, std::vector<string>()), nBestHeight);
 }
+
+
+
+
 
 std::map<CNetAddr, int64> CNode::setBanned;
 CCriticalSection CNode::cs_setBanned;
@@ -638,61 +637,14 @@ void CNode::copyStats(CNodeStats &stats)
 }
 #undef X
 
-// requires LOCK(cs_vRecvMsg)
-bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes)
-{
-while (nBytes > 0) {
-	// get current incomplete message, or create a new one
-	if (vRecvMsg.empty() ||
-		vRecvMsg.back().complete())
-		vRecvMsg.push_back(CNetMessage(SER_NETWORK, nRecvVersion));
-		CNetMessage& msg = vRecvMsg.back();
-	// absorb network data
-	int handled;
-	if (!msg.in_data)
-	handled = msg.readHeader(pch, nBytes);
-	else
-	handled = msg.readData(pch, nBytes);
-	if (handled < 0)
-	return false;
-	pch += handled;
-	nBytes -= handled;
-}
-return true;
-}
-int CNetMessage::readHeader(const char *pch, unsigned int nBytes)
-{
-// copy data to temporary parsing buffer
-unsigned int nRemaining = 24 - nHdrPos;
-unsigned int nCopy = std::min(nRemaining, nBytes);
-memcpy(&hdrbuf[nHdrPos], pch, nCopy);
-nHdrPos += nCopy;
-// if header incomplete, exit
-if (nHdrPos < 24)
-return nCopy;
-// deserialize to CMessageHeader
-try {
-hdrbuf >> hdr;
-}
-catch (std::exception &e) {
-return -1;
-}
-// reject messages larger than MAX_SIZE
-if (hdr.nMessageSize > MAX_SIZE)
-return -1;
-// switch state to reading message data
-in_data = true;
-vRecv.resize(hdr.nMessageSize);
-return nCopy;
-}
-int CNetMessage::readData(const char *pch, unsigned int nBytes)
-{
-unsigned int nRemaining = hdr.nMessageSize - nDataPos;
-unsigned int nCopy = std::min(nRemaining, nBytes);
-memcpy(&vRecv[nDataPos], pch, nCopy);
-nDataPos += nCopy;
-return nCopy;
-}
+
+
+
+
+
+
+
+
 
 void ThreadSocketHandler(void* parg)
 {
@@ -721,7 +673,7 @@ void ThreadSocketHandler2(void* parg)
     list<CNode*> vNodesDisconnected;
     unsigned int nPrevNodeCount = 0;
 
-    while (true)
+    loop
     {
         //
         // Disconnect nodes
@@ -733,7 +685,7 @@ void ThreadSocketHandler2(void* parg)
             BOOST_FOREACH(CNode* pnode, vNodesCopy)
             {
                 if (pnode->fDisconnect ||
-                    (pnode->GetRefCount() <= 0 && pnode->vRecvMsg.empty() && pnode->vSend.empty()))
+                    (pnode->GetRefCount() <= 0 && pnode->vRecv.empty() && pnode->vSend.empty()))
                 {
                     // remove from vNodes
                     vNodes.erase(remove(vNodes.begin(), vNodes.end(), pnode), vNodes.end());
@@ -765,7 +717,7 @@ void ThreadSocketHandler2(void* parg)
                         TRY_LOCK(pnode->cs_vSend, lockSend);
                         if (lockSend)
                         {
-                            TRY_LOCK(pnode->cs_vRecvMsg, lockRecv);
+                            TRY_LOCK(pnode->cs_vRecv, lockRecv);
                             if (lockRecv)
                             {
                                 TRY_LOCK(pnode->cs_mapRequests, lockReq);
@@ -934,12 +886,15 @@ void ThreadSocketHandler2(void* parg)
                 continue;
             if (FD_ISSET(pnode->hSocket, &fdsetRecv) || FD_ISSET(pnode->hSocket, &fdsetError))
             {
-                TRY_LOCK(pnode->cs_vRecvMsg, lockRecv);
+                TRY_LOCK(pnode->cs_vRecv, lockRecv);
                 if (lockRecv)
                 {
-                    if (pnode->GetTotalRecvSize() > ReceiveFloodSize()) {
+                    CDataStream& vRecv = pnode->vRecv;
+                    unsigned int nPos = vRecv.size();
+
+                    if (nPos > ReceiveBufferSize()) {
                         if (!pnode->fDisconnect)
-                            printf("socket recv flood control disconnect (%u bytes)\n", pnode->GetTotalRecvSize());
+                            printf("socket recv flood control disconnect (%"PRIszu" bytes)\n", vRecv.size());
                         pnode->CloseSocketDisconnect();
                     }
                     else {
@@ -948,8 +903,8 @@ void ThreadSocketHandler2(void* parg)
                         int nBytes = recv(pnode->hSocket, pchBuf, sizeof(pchBuf), MSG_DONTWAIT);
                         if (nBytes > 0)
                         {
-                            if (!pnode->ReceiveMsgBytes(pchBuf, nBytes))
-								pnode->CloseSocketDisconnect();
+                            vRecv.resize(nPos + nBytes);
+                            memcpy(&vRecv[nPos], pchBuf, nBytes);
                             pnode->nLastRecv = GetTime();
                         }
                         else if (nBytes == 0)
@@ -1084,14 +1039,10 @@ void ThreadMapPort2(void* parg)
 #ifndef UPNPDISCOVER_SUCCESS
     /* miniupnpc 1.5 */
     devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0);
-#elif MINIUPNPC_API_VERSION < 14
+#else
     /* miniupnpc 1.6 */
     int error = 0;
     devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, &error);
-#else
-    /* miniupnpc 1.9.20150730 */
-    int error = 0;
-    devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, 2, &error);
 #endif
 
     struct UPNPUrls urls;
@@ -1135,7 +1086,7 @@ void ThreadMapPort2(void* parg)
         else
             printf("UPnP Port Mapping successful.\n");
         int i = 1;
-        while (true) {
+        loop {
             if (fShutdown || !fUseUPnP)
             {
                 r = UPNP_DeletePortMapping(urls.controlURL, data.first.servicetype, port.c_str(), "TCP", 0);
@@ -1170,7 +1121,7 @@ void ThreadMapPort2(void* parg)
         freeUPNPDevlist(devlist); devlist = 0;
         if (r != 0)
             FreeUPNPUrls(&urls);
-        while (true) {
+        loop {
             if (fShutdown || !fUseUPnP)
                 return;
             Sleep(2000);
@@ -1198,8 +1149,10 @@ void MapPort()
 // The first name is used as information source for addrman.
 // The second name should resolve to a list of seed addresses.
 static const char *strDNSSeed[][2] = {
-	{"presstab nodes", "hypseed.presstab.pw"},
-	{"CCE block explorer", "hyp.altcointech.net"},
+    {"chainworks seed", "perfectcoin.tk"},
+    {},
+    {},
+    {},
 };
 
 void ThreadDNSAddressSeed(void* parg)
@@ -1270,7 +1223,7 @@ void ThreadDNSAddressSeed2(void* parg)
 
 unsigned int pnSeed[] =
 {
-	//0x8785f050,
+//	0x8785f050,
 };
 
 void DumpAddresses()
@@ -1399,7 +1352,7 @@ void ThreadOpenConnections2(void* parg)
 
     // Initiate network connections
     int64 nStart = GetTime();
-    while (true)
+    loop
     {
         ProcessOneShot();
 
@@ -1458,7 +1411,7 @@ void ThreadOpenConnections2(void* parg)
         int64 nANow = GetAdjustedTime();
 
         int nTries = 0;
-        while (true)
+        loop
         {
             // use an nUnkBias between 10 (no outgoing connections) and 90 (8 outgoing connections)
             CAddress addr = addrman.Select(10 + min(nOutbound,8)*10);
@@ -1674,14 +1627,11 @@ void ThreadMessageHandler2(void* parg)
             pnodeTrickle = vNodesCopy[GetRand(vNodesCopy.size())];
         BOOST_FOREACH(CNode* pnode, vNodesCopy)
         {
-            if(pnode->fDisconnect)
-				continue;
-			// Receive messages
+            // Receive messages
             {
-                TRY_LOCK(pnode->cs_vRecvMsg, lockRecv);
+                TRY_LOCK(pnode->cs_vRecv, lockRecv);
                 if (lockRecv)
-                    if(!ProcessMessages(pnode))
-						pnode->CloseSocketDisconnect();
+                    ProcessMessages(pnode);
             }
             if (fShutdown)
                 return;
@@ -1906,16 +1856,27 @@ void StartNode(void* parg)
     //
     // Start threads
     //
-	
+
+/*
     if (!GetBoolArg("-dnsseed", true))
         printf("DNS seeding disabled\n");
     else
         if (!NewThread(ThreadDNSAddressSeed, NULL))
             printf("Error: NewThread(ThreadDNSAddressSeed) failed\n");
+*/
+
+    if (!GetBoolArg("-dnsseed", false))
+        printf("DNS seeding disabled\n");
+    if (GetBoolArg("-dnsseed", false))
+        printf("DNS seeding NYI\n");
 
     // Map ports with UPnP
     if (fUseUPnP)
         MapPort();
+
+    // Get addresses from IRC and advertise ours
+    if (!NewThread(ThreadIRCSeed, NULL))
+        printf("Error: NewThread(ThreadIRCSeed) failed\n");
 
     // Send and receive from sockets, accept connections
     if (!NewThread(ThreadSocketHandler, NULL))
